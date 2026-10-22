@@ -1,12 +1,13 @@
 import { useMemo, useRef } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useFrame, useThree } from '@react-three/fiber'
+import { Stars } from '@react-three/drei'
 import { RigidBody, CuboidCollider, CylinderCollider } from '@react-three/rapier'
 import {
   Color, PlaneGeometry, Float32BufferAttribute, CylinderGeometry, ConeGeometry,
-  IcosahedronGeometry, DodecahedronGeometry, OctahedronGeometry, Matrix4, Euler, Quaternion, Vector3,
+  IcosahedronGeometry, DodecahedronGeometry, OctahedronGeometry, Matrix4, Euler, Quaternion, Vector3, MathUtils,
 } from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { ZONES, carState } from '../store'
+import { ZONES, carState, env, useStore } from '../store'
 import { profile } from '../data/portfolio'
 import { rng } from './utils'
 import Sign from './Sign'
@@ -234,17 +235,41 @@ function Clouds() {
   )
 }
 
+const DAY = {
+  sky: new Color('#bde0fe'), hemiSky: new Color('#dff3ff'), hemiGround: new Color('#6a8f3a'), hemi: 1.1,
+  sun: new Color('#fff4e0'), sunI: 2.2,
+}
+const NIGHT = {
+  sky: new Color('#0b1026'), hemiSky: new Color('#4a5d9c'), hemiGround: new Color('#1b2a1b'), hemi: 0.35,
+  sun: new Color('#9fb4ff'), sunI: 0.55, // moonlight
+}
+
 function Lights() {
   const light = useRef()
-  useFrame(() => {
+  const hemi = useRef()
+  const { scene } = useThree()
+  useFrame((_, dt) => {
     const p = carState.position
     light.current.position.set(p.x + 25, 40, p.z + 18)
     light.current.target.position.set(p.x, 0, p.z)
     light.current.target.updateMatrixWorld()
+
+    // ease between day and night
+    const target = useStore.getState().night ? 1 : 0
+    env.night = MathUtils.damp(env.night, target, 2.5, Math.min(dt, 0.1))
+    if (Math.abs(env.night - target) < 0.001) env.night = target
+    const n = env.night
+    scene.background.lerpColors(DAY.sky, NIGHT.sky, n)
+    scene.fog.color.copy(scene.background)
+    hemi.current.color.lerpColors(DAY.hemiSky, NIGHT.hemiSky, n)
+    hemi.current.groundColor.lerpColors(DAY.hemiGround, NIGHT.hemiGround, n)
+    hemi.current.intensity = MathUtils.lerp(DAY.hemi, NIGHT.hemi, n)
+    light.current.color.lerpColors(DAY.sun, NIGHT.sun, n)
+    light.current.intensity = MathUtils.lerp(DAY.sunI, NIGHT.sunI, n)
   })
   return (
     <>
-      <hemisphereLight args={['#dff3ff', '#6a8f3a', 1.1]} />
+      <hemisphereLight ref={hemi} args={['#dff3ff', '#6a8f3a', 1.1]} />
       <directionalLight
         ref={light}
         castShadow
@@ -263,9 +288,15 @@ function Lights() {
   )
 }
 
+function NightSky() {
+  const night = useStore((s) => s.night)
+  return night ? <Stars radius={160} depth={40} count={2500} factor={5} saturation={0} fade speed={0.6} /> : null
+}
+
 export default function World() {
   return (
     <>
+      <NightSky />
       <color attach="background" args={['#bde0fe']} />
       <fog attach="fog" args={['#bde0fe', 70, 190]} />
       <Lights />

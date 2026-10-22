@@ -15,6 +15,9 @@ export const SPAWN = { position: [0, 1, 10], yaw: 0 }
 // Live car data shared with non-React code (camera, lights) without re-renders.
 export const carState = { position: new Vector3(...SPAWN.position), speed: 0 }
 
+// 0 = day, 1 = night. Eased toward the `night` toggle every frame by <World />.
+export const env = { night: 0 }
+
 // Input state, written by keyboard + touch controls, read every frame by the car.
 export const keys = { forward: false, back: false, left: false, right: false, boost: false }
 
@@ -24,8 +27,14 @@ export const useStore = create((set, get) => ({
   dismissedZone: null, // zone whose popup the user closed while still inside it
   manualZone: null, // zone opened from the quick-nav buttons
   resetCount: 0,
+  night: localStorage.getItem('night') === '1',
 
   start: () => set({ started: true }),
+  toggleNight: () =>
+    set((s) => {
+      localStorage.setItem('night', s.night ? '0' : '1')
+      return { night: !s.night }
+    }),
   setActiveZone: (id) =>
     set((s) => ({
       activeZone: id,
@@ -37,6 +46,8 @@ export const useStore = create((set, get) => ({
   reset: () =>
     set((s) => ({ resetCount: s.resetCount + 1, activeZone: null, dismissedZone: null, manualZone: null })),
 }))
+
+env.night = useStore.getState().night ? 1 : 0 // no fade-in when the page loads in night mode
 
 // Which popup should currently be visible (play area has no popup).
 export const selectPopup = (s) => {

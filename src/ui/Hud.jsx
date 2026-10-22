@@ -24,7 +24,7 @@ function Intro() {
           </div>
           <div className="keyhelp">
             <div><b>W A S D</b> / arrows — drive</div>
-            <div><kbd>Shift</kbd> boost &nbsp; <kbd>R</kbd> reset</div>
+            <div><kbd>Shift</kbd> boost &nbsp; <kbd>R</kbd> reset &nbsp; <kbd>N</kbd> night mode</div>
             <div>Drive into the glowing zones to explore</div>
           </div>
         </div>
@@ -76,6 +76,8 @@ function TouchControls() {
 export default function Hud() {
   const openZone = useStore((s) => s.openZone)
   const reset = useStore((s) => s.reset)
+  const night = useStore((s) => s.night)
+  const toggleNight = useStore((s) => s.toggleNight)
   return (
     <>
       <div className="hud-top">
@@ -101,12 +103,13 @@ export default function Hud() {
           <kbd>W</kbd>
           <kbd>A</kbd>
           <kbd>S</kbd>
-          <kbd>D</kbd> drive · <kbd>Shift</kbd> boost · <kbd>R</kbd> reset
+          <kbd>D</kbd> drive · <kbd>Shift</kbd> boost · <kbd>R</kbd> reset · <kbd>N</kbd> night
         </div>
         <div className="socials">
           {profile.github && <a href={profile.github} target="_blank" rel="noreferrer">GitHub</a>}
           {profile.linkedin && <a href={profile.linkedin} target="_blank" rel="noreferrer">LinkedIn</a>}
           {profile.email && <a href={`mailto:${profile.email}`}>Email</a>}
+          <button className="linklike" onClick={toggleNight}>{night ? '☀️ Day' : '🌙 Night'}</button>
           <button className="linklike" onClick={reset}>Reset</button>
         </div>
       </div>

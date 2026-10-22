@@ -1,5 +1,7 @@
 import { useMemo } from 'react'
-import { RigidBody, CuboidCollider, CylinderCollider, BallCollider, ConeCollider } from '@react-three/rapier'
+import { RigidBody, CuboidCollider, CylinderCollider, BallCollider, ConeCollider, ConvexHullCollider } from '@react-three/rapier'
+import { Vector3 } from 'three'
+import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
 import { ZONES, useStore } from '../store'
 
 const CRATE_COLORS = ['#f59f00', '#e8590c', '#fab005', '#d9480f']
@@ -103,6 +105,71 @@ function Barrel({ position }) {
   )
 }
 
+// Wedge that climbs toward local -Z (the car's forward). `rotation` is a yaw in radians.
+function Ramp({ position, rotation = 0, length = 6, width = 4, height = 1.3, color = '#5c7cfa' }) {
+  const { points, geo } = useMemo(() => {
+    const w = width / 2
+    const l = length / 2
+    const pts = [
+      [-w, 0, l], [w, 0, l], [-w, 0, -l], [w, 0, -l],
+      [-w, height, -l], [w, height, -l],
+    ]
+    return { points: new Float32Array(pts.flat()), geo: new ConvexGeometry(pts.map((p) => new Vector3(...p))) }
+  }, [length, width, height])
+  const angle = Math.atan2(height, length)
+  const slope = Math.hypot(height, length)
+
+  return (
+    <RigidBody type="fixed" colliders={false} position={position} rotation={[0, rotation, 0]}>
+      <ConvexHullCollider args={[points]} friction={0.5} />
+      <mesh geometry={geo} castShadow receiveShadow>
+        <meshStandardMaterial color={color} flatShading />
+      </mesh>
+      {/* chevrons and a striped lip on the slope */}
+      <group position={[0, height / 2 + 0.01, 0]} rotation={[angle, 0, 0]}>
+        {[-0.25, 0.05].map((f) => (
+          <group key={f} position={[0, 0, f * slope]}>
+            {[-1, 1].map((s) => (
+              <mesh key={s} position={[s * width * 0.13, 0, 0]} rotation={[-Math.PI / 2, 0, s * 0.6]}>
+                <planeGeometry args={[0.25, width * 0.32]} />
+                <meshStandardMaterial color="#ffffff" />
+              </mesh>
+            ))}
+          </group>
+        ))}
+        {Array.from({ length: 6 }, (_, i) => (
+          <mesh key={i} position={[-width / 2 + (i + 0.5) * (width / 6), 0, -slope / 2 + 0.2]} rotation={[-Math.PI / 2, 0, 0]}>
+            <planeGeometry args={[width / 6, 0.4]} />
+            <meshStandardMaterial color={i % 2 ? '#212529' : '#fcc419'} />
+          </mesh>
+        ))}
+      </group>
+    </RigidBody>
+  )
+}
+
+function Ramps() {
+  const zone = ZONES.find((z) => z.id === 'play')
+  const [cx, , cz] = zone.position
+  return (
+    <group>
+      {/* big kicker on the west side, launches north */}
+      <Ramp position={[cx - 12, 0, cz + 2]} length={7} width={4.5} height={1.6} color="#e64980" />
+      {/* jump straight into the bowling pins */}
+      <Ramp position={[cx + 8, 0, cz + 10]} length={6} width={4} height={1.2} />
+      {/* table-top along the north edge: up, flat deck, down */}
+      <Ramp position={[cx - 3.5, 0, cz - 12]} rotation={-Math.PI / 2} length={3} width={4} height={1.1} color="#20c997" />
+      <RigidBody type="fixed" colliders="cuboid" position={[cx, 0.55, cz - 12]}>
+        <mesh castShadow receiveShadow>
+          <boxGeometry args={[4, 1.1, 4]} />
+          <meshStandardMaterial color="#20c997" flatShading />
+        </mesh>
+      </RigidBody>
+      <Ramp position={[cx + 3.5, 0, cz - 12]} rotation={Math.PI / 2} length={3} width={4} height={1.1} color="#20c997" />
+    </group>
+  )
+}
+
 function Objects() {
   const zone = ZONES.find((z) => z.id === 'play')
   const [cx, , cz] = zone.position
@@ -171,5 +238,10 @@ function Objects() {
 // Remounts all physics props whenever the user presses R.
 export default function Playground() {
   const resetCount = useStore((s) => s.resetCount)
-  return <Objects key={resetCount} />
+  return (
+    <>
+      <Ramps />
+      <Objects key={resetCount} />
+    </>
+  )
 }

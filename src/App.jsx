@@ -2,10 +2,12 @@ import { Suspense, useEffect } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Physics } from '@react-three/rapier'
 import { useProgress } from '@react-three/drei'
+import { EffectComposer, Bloom } from '@react-three/postprocessing'
 import World from './components/World'
 import Zones from './components/Zones'
 import Car from './components/Car'
 import Playground from './components/Playground'
+import Fireflies from './components/Fireflies'
 import Hud from './ui/Hud'
 import Popup from './ui/Popup'
 import { keys, useStore } from './store'
@@ -29,6 +31,7 @@ function useKeyboard() {
         if (!st.started && k !== 'boost') st.start()
       }
       if (e.code === 'KeyR' && !e.repeat && !e.ctrlKey && !e.metaKey) st.reset()
+      if (e.code === 'KeyN' && !e.repeat && !e.ctrlKey && !e.metaKey) st.toggleNight()
       if (e.code === 'Escape') st.closePopup()
       if (e.code === 'Enter' && !st.started) st.start()
     }
@@ -48,6 +51,17 @@ function useKeyboard() {
   }, [])
 }
 
+// Bloom only runs at night, so the day scene costs nothing extra.
+function Effects() {
+  const night = useStore((s) => s.night)
+  if (!night) return null
+  return (
+    <EffectComposer multisampling={4}>
+      <Bloom mipmapBlur luminanceThreshold={1} luminanceSmoothing={0.2} intensity={2} />
+    </EffectComposer>
+  )
+}
+
 function Loader() {
   const { progress, active } = useProgress()
   return active ? <div className="loader">Loading… {Math.round(progress)}%</div> : null
@@ -65,6 +79,8 @@ export default function App() {
             <Playground />
             <Car />
           </Physics>
+          <Fireflies />
+          <Effects />
         </Suspense>
       </Canvas>
       <Loader />

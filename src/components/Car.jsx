@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
-import { RigidBody, CuboidCollider, CoefficientCombineRule } from '@react-three/rapier'
+import { RigidBody, CuboidCollider, CoefficientCombineRule, useRapier } from '@react-three/rapier'
 import { Quaternion, Vector3, Euler, MathUtils } from 'three'
-import { useStore, keys, carState, ZONES, SPAWN } from '../store'
+import { useStore, keys, carState, env, ZONES, SPAWN } from '../store'
 
 const MAX_FWD = 20
 const MAX_BOOST = 30
@@ -12,16 +12,24 @@ const BRAKE = 40
 const DRAG = 10
 const TURN = 2.4
 const WHEEL_R = 0.42
+const PROBE_AHEAD = 1.7 // ground probe sits under the bumper so ramps are felt before the body hits them
+const PROBE_UP = 1
+const PROBE_LEN = 1.6
 
 const CAM_OFFSET = new Vector3(0, 6.5, 13) // behind (+Z local, car faces -Z) and above
 
 export default function Car() {
   const body = useRef()
   const chassis = useRef()
+  const tilt = useRef()
+  const climbing = useRef(false)
+  const headlight = useRef()
+  const headlightTarget = useRef()
   const wheelSpin = useRef([])
   const frontPivots = useRef([])
   const steer = useRef(0)
   const { camera } = useThree()
+  const { world, rapier } = useRapier()
 
   const tmp = useMemo(
     () => ({
@@ -30,6 +38,7 @@ export default function Car() {
       camPos: new Vector3(),
       look: new Vector3(),
       lookSmooth: new Vector3(...SPAWN.position),
+      ray: new rapier.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 }),
     }),
     []
   )
@@ -56,6 +65,10 @@ export default function Car() {
       rb.setLinvel({ x: 0, y: 0, z: 0 }, true)
     }
     window.__car = carState
+  }, [])
+
+  useEffect(() => {
+    headlight.current.target = headlightTarget.current
   }, [])
 
   useEffect(() => {
@@ -102,11 +115,36 @@ export default function Car() {
     steer.current = MathUtils.damp(steer.current, steerIn, 10, dt)
     const yawRate = steer.current * TURN * MathUtils.clamp(speed / 7, -1, 1)
 
-    rb.setLinvel({ x: tmp.fwd.x * speed, y: Math.min(lv.y, 2), z: tmp.fwd.z * speed }, true)
+    // ── Ground probe: follow slopes so ramps launch the car ─
+    const t = rb.translation()
+    const dir = Math.sign(speed) || 1
+    tmp.ray.origin.x = t.x + tmp.fwd.x * PROBE_AHEAD * dir
+    tmp.ray.origin.y = t.y + PROBE_UP
+    tmp.ray.origin.z = t.z + tmp.fwd.z * PROBE_AHEAD * dir
+    const hit = world.castRayAndGetNormal(tmp.ray, PROBE_LEN, true, rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, undefined, rb)
+    const airborne = !hit || hit.normal.y < 0.5
+    const vx = tmp.fwd.x * speed
+    const vz = tmp.fwd.z * speed
+    let vy
+    let climb = false
+    if (airborne) {
+      vy = Math.min(lv.y, 15) // keep the launch velocity off a ramp lip
+    } else {
+      const n = hit.normal
+      const slopeVy = -(n.x * vx + n.z * vz) / n.y // vertical speed needed to stay on the surface
+      vy = Math.max(slopeVy, Math.min(lv.y, 2))
+      // surface ahead is at/above the wheels and rising: ride it without gravity dragging us back down the slope
+      climb = slopeVy > 0.5 && hit.timeOfImpact < PROBE_UP + 0.15
+    }
+    if (climb !== climbing.current) {
+      climbing.current = climb
+      rb.setGravityScale(climb ? 0 : 1, true)
+    }
+
+    rb.setLinvel({ x: vx, y: vy, z: vz }, true)
     rb.setAngvel({ x: 0, y: yawRate, z: 0 }, true)
 
     // fell off the world?
-    const t = rb.translation()
     if (t.y < -15) resetCar()
 
     carState.position.set(t.x, t.y, t.z)
@@ -118,6 +156,13 @@ export default function Car() {
     if (chassis.current) {
       chassis.current.rotation.z = MathUtils.damp(chassis.current.rotation.z, -yawRate * 0.04 * Math.sign(speed || 1), 6, dt)
       chassis.current.rotation.x = MathUtils.damp(chassis.current.rotation.x, throttle * 0.025, 6, dt)
+    }
+    headlight.current.intensity = env.night * 80
+
+    // pitch the whole car with its vertical motion (the physics body itself never tilts)
+    if (tilt.current) {
+      const pitch = MathUtils.clamp(Math.atan2(lv.y, Math.max(Math.abs(speed), 4)) * dir, -0.45, 0.45)
+      tilt.current.rotation.x = MathUtils.damp(tilt.current.rotation.x, pitch, 8, dt)
     }
 
     // ── Zone detection ─────────────────────────────────────
@@ -160,87 +205,91 @@ export default function Car() {
     >
       <CuboidCollider args={[0.95, 0.45, 1.8]} position={[0, 0.5, 0]} mass={25} friction={0} frictionCombineRule={CoefficientCombineRule.Min} restitution={0.1} />
 
-      <group ref={chassis}>
-        {/* lower body */}
-        <mesh castShadow position={[0, 0.72, 0]}>
-          <boxGeometry args={[1.8, 0.55, 3.6]} />
-          <meshStandardMaterial color="#e63946" flatShading roughness={0.5} />
-        </mesh>
-        {/* hood stripe */}
-        <mesh position={[0, 1.0, -1.1]}>
-          <boxGeometry args={[0.35, 0.02, 1.3]} />
-          <meshStandardMaterial color="#ffffff" />
-        </mesh>
-        {/* cabin */}
-        <mesh castShadow position={[0, 1.25, 0.25]}>
-          <boxGeometry args={[1.5, 0.55, 1.8]} />
-          <meshStandardMaterial color="#f1faee" flatShading />
-        </mesh>
-        {/* windows */}
-        <mesh position={[0, 1.27, -0.66]} rotation={[-0.25, 0, 0]}>
-          <planeGeometry args={[1.35, 0.45]} />
-          <meshStandardMaterial color="#1d3557" roughness={0.1} metalness={0.4} />
-        </mesh>
-        <mesh position={[0, 1.27, 1.16]} rotation={[0, Math.PI, 0]}>
-          <planeGeometry args={[1.35, 0.42]} />
-          <meshStandardMaterial color="#1d3557" roughness={0.1} metalness={0.4} />
-        </mesh>
-        {[-1, 1].map((s) => (
-          <mesh key={s} position={[s * 0.76, 1.27, 0.25]} rotation={[0, (s * Math.PI) / 2, 0]}>
-            <planeGeometry args={[1.5, 0.4]} />
+      <group ref={tilt}>
+        <spotLight ref={headlight} position={[0, 0.9, -1.9]} angle={0.55} penumbra={0.6} distance={40} decay={1.4} color="#fff3d6" intensity={0} />
+        <object3D ref={headlightTarget} position={[0, 0, -14]} />
+        <group ref={chassis}>
+          {/* lower body */}
+          <mesh castShadow position={[0, 0.72, 0]}>
+            <boxGeometry args={[1.8, 0.55, 3.6]} />
+            <meshStandardMaterial color="#e63946" flatShading roughness={0.5} />
+          </mesh>
+          {/* hood stripe */}
+          <mesh position={[0, 1.0, -1.1]}>
+            <boxGeometry args={[0.35, 0.02, 1.3]} />
+            <meshStandardMaterial color="#ffffff" />
+          </mesh>
+          {/* cabin */}
+          <mesh castShadow position={[0, 1.25, 0.25]}>
+            <boxGeometry args={[1.5, 0.55, 1.8]} />
+            <meshStandardMaterial color="#f1faee" flatShading />
+          </mesh>
+          {/* windows */}
+          <mesh position={[0, 1.27, -0.66]} rotation={[-0.25, 0, 0]}>
+            <planeGeometry args={[1.35, 0.45]} />
             <meshStandardMaterial color="#1d3557" roughness={0.1} metalness={0.4} />
           </mesh>
-        ))}
-        {/* headlights */}
-        {[-0.6, 0.6].map((x) => (
-          <mesh key={x} position={[x, 0.78, -1.81]}>
-            <boxGeometry args={[0.35, 0.18, 0.02]} />
-            <meshStandardMaterial color="#fff9db" emissive="#fff3bf" emissiveIntensity={1.5} />
+          <mesh position={[0, 1.27, 1.16]} rotation={[0, Math.PI, 0]}>
+            <planeGeometry args={[1.35, 0.42]} />
+            <meshStandardMaterial color="#1d3557" roughness={0.1} metalness={0.4} />
           </mesh>
-        ))}
-        {/* tail lights */}
-        {[-0.6, 0.6].map((x) => (
-          <mesh key={x} position={[x, 0.78, 1.81]}>
-            <boxGeometry args={[0.35, 0.15, 0.02]} />
-            <meshStandardMaterial color="#c92a2a" emissive="#fa5252" emissiveIntensity={0.8} />
+          {[-1, 1].map((s) => (
+            <mesh key={s} position={[s * 0.76, 1.27, 0.25]} rotation={[0, (s * Math.PI) / 2, 0]}>
+              <planeGeometry args={[1.5, 0.4]} />
+              <meshStandardMaterial color="#1d3557" roughness={0.1} metalness={0.4} />
+            </mesh>
+          ))}
+          {/* headlights */}
+          {[-0.6, 0.6].map((x) => (
+            <mesh key={x} position={[x, 0.78, -1.81]}>
+              <boxGeometry args={[0.35, 0.18, 0.02]} />
+              <meshStandardMaterial color="#fff9db" emissive="#fff3bf" emissiveIntensity={1.5} />
+            </mesh>
+          ))}
+          {/* tail lights */}
+          {[-0.6, 0.6].map((x) => (
+            <mesh key={x} position={[x, 0.78, 1.81]}>
+              <boxGeometry args={[0.35, 0.15, 0.02]} />
+              <meshStandardMaterial color="#c92a2a" emissive="#fa5252" emissiveIntensity={0.8} />
+            </mesh>
+          ))}
+          {/* bumpers */}
+          <mesh position={[0, 0.5, -1.82]} castShadow>
+            <boxGeometry args={[1.85, 0.18, 0.12]} />
+            <meshStandardMaterial color="#343a40" />
           </mesh>
-        ))}
-        {/* bumpers */}
-        <mesh position={[0, 0.5, -1.82]} castShadow>
-          <boxGeometry args={[1.85, 0.18, 0.12]} />
-          <meshStandardMaterial color="#343a40" />
-        </mesh>
-        <mesh position={[0, 0.5, 1.82]} castShadow>
-          <boxGeometry args={[1.85, 0.18, 0.12]} />
-          <meshStandardMaterial color="#343a40" />
-        </mesh>
-        {/* roof spoiler */}
-        <mesh position={[0, 1.15, 1.7]} castShadow>
-          <boxGeometry args={[1.6, 0.06, 0.35]} />
-          <meshStandardMaterial color="#e63946" flatShading />
-        </mesh>
-      </group>
-
-      {wheelPos.map(([x, y, z, front], i) => (
-        <group
-          key={i}
-          position={[x, y, z]}
-          ref={(el) => {
-            if (front) frontPivots.current[i] = el
-          }}
-        >
-          <group ref={(el) => (wheelSpin.current[i] = el)}>
-            <mesh rotation={[0, 0, Math.PI / 2]} castShadow>
-              <cylinderGeometry args={[WHEEL_R, WHEEL_R, 0.36, 10]} />
-              <meshStandardMaterial color="#212529" flatShading />
-            </mesh>
-            <mesh rotation={[0, 0, Math.PI / 2]}>
-              <cylinderGeometry args={[0.2, 0.2, 0.38, 6]} />
-              <meshStandardMaterial color="#adb5bd" flatShading />
-            </mesh>
-          </group>
+          <mesh position={[0, 0.5, 1.82]} castShadow>
+            <boxGeometry args={[1.85, 0.18, 0.12]} />
+            <meshStandardMaterial color="#343a40" />
+          </mesh>
+          {/* roof spoiler */}
+          <mesh position={[0, 1.15, 1.7]} castShadow>
+            <boxGeometry args={[1.6, 0.06, 0.35]} />
+            <meshStandardMaterial color="#e63946" flatShading />
+          </mesh>
         </group>
-      ))}
+
+        {wheelPos.map(([x, y, z, front], i) => (
+          <group
+            key={i}
+            position={[x, y, z]}
+            ref={(el) => {
+              if (front) frontPivots.current[i] = el
+            }}
+          >
+            <group ref={(el) => (wheelSpin.current[i] = el)}>
+              <mesh rotation={[0, 0, Math.PI / 2]} castShadow>
+                <cylinderGeometry args={[WHEEL_R, WHEEL_R, 0.36, 10]} />
+                <meshStandardMaterial color="#212529" flatShading />
+              </mesh>
+              <mesh rotation={[0, 0, Math.PI / 2]}>
+                <cylinderGeometry args={[0.2, 0.2, 0.38, 6]} />
+                <meshStandardMaterial color="#adb5bd" flatShading />
+              </mesh>
+            </group>
+          </group>
+        ))}
+      </group>
     </RigidBody>
   )
 }
